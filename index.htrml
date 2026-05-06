@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Grid Cropper — 3×3 Bulk Slicer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+    <script>
+        tailwind.config = {
+            theme: { extend: { fontFamily: { display: ['Space Grotesk', 'sans-serif'] } } }
+        }
+    </script>
+
+    <style>
+        @property --border-angle {
+            syntax: '<angle>';
+            initial-value: 0deg;
+            inherits: false;
+        }
+        body { font-family: 'Space Grotesk', sans-serif; }
+
+        .animated-border {
+            --border-angle: 0deg;
+            border: 2px solid transparent;
+            background:
+                linear-gradient(#0c0c18, #0c0c18) padding-box,
+                conic-gradient(from var(--border-angle), #06b6d4, #8b5cf6, #22d3ee, transparent, #06b6d4) border-box;
+            animation: rotate-border 3s linear infinite;
+        }
+        .animated-border:hover, .animated-border.drag-over {
+            border-width: 3px;
+            box-shadow: 0 0 40px rgba(6,182,212,0.15), 0 0 80px rgba(139,92,246,0.08);
+        }
+        @keyframes rotate-border { to { --border-angle: 360deg; } }
+
+        @keyframes float-1 {
+            0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(40px,-60px) scale(1.1)}66%{transform:translate(-30px,40px) scale(.95)}
+        }
+        @keyframes float-2 {
+            0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(-50px,30px) scale(.9)}66%{transform:translate(60px,-20px) scale(1.08)}
+        }
+        @keyframes float-3 {
+            0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(30px,50px) scale(1.05)}
+        }
+        .blob-1{animation:float-1 12s ease-in-out infinite}
+        .blob-2{animation:float-2 16s ease-in-out infinite}
+        .blob-3{animation:float-3 10s ease-in-out infinite}
+
+        @keyframes shimmer{0%{background-position:-300% 0}100%{background-position:300% 0}}
+        .shimmer-bar{background:linear-gradient(90deg,rgba(255,255,255,.03) 25%,rgba(255,255,255,.1) 50%,rgba(255,255,255,.03) 75%);background-size:200% 100%;animation:shimmer 2s linear infinite}
+
+        @keyframes pulse-glow{0%,100%{filter:drop-shadow(0 0 8px rgba(6,182,212,.4));opacity:.7}50%{filter:drop-shadow(0 0 24px rgba(6,182,212,.8));opacity:1}}
+        .pulse-glow{animation:pulse-glow 1.8s ease-in-out infinite}
+
+        @keyframes card-in{0%{opacity:0;transform:translateY(20px) scale(.95)}100%{opacity:1;transform:translateY(0) scale(1)}}
+        .card-enter{animation:card-in .5s cubic-bezier(.16,1,.3,1) forwards;opacity:0}
+
+        @keyframes slide-up{0%{opacity:0;transform:translateY(24px)}100%{opacity:1;transform:translateY(0)}}
+        .slide-up{animation:slide-up .5s cubic-bezier(.16,1,.3,1) forwards}
+
+        .img-card{transition:all .35s cubic-bezier(.16,1,.3,1)}
+        .img-card:hover{transform:translateY(-4px);box-shadow:0 12px 40px rgba(6,182,212,.12)}
+        .img-card:hover .grid-tile{opacity:1}
+
+        .grid-tile{transition:all .3s;opacity:.85}
+        .grid-tile:hover{opacity:1;transform:scale(1.15);z-index:10;box-shadow:0 0 12px rgba(6,182,212,.3)}
+
+        @keyframes toast-in{0%{opacity:0;transform:translateX(40px) scale(.95)}100%{opacity:1;transform:translateX(0) scale(1)}}
+        @keyframes toast-out{0%{opacity:1;transform:translateX(0) scale(1)}100%{opacity:0;transform:translateX(40px) scale(.95)}}
+        .toast-enter{animation:toast-in .35s ease-out forwards}
+        .toast-exit{animation:toast-out .3s ease-in forwards}
+
+        @keyframes modal-in{0%{opacity:0;transform:scale(.85)}100%{opacity:1;transform:scale(1)}}
+        .modal-enter{animation:modal-in .35s cubic-bezier(.16,1,.3,1) forwards}
+
+        @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+        .spin{animation:spin 1s linear infinite}
+
+        ::-webkit-scrollbar{width:6px}
+        ::-webkit-scrollbar-track{background:rgba(255,255,255,.02)}
+        ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:3px}
+
+        @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+    </style>
+</head>
+
+<body class="bg-[#07070d] text-white min-h-screen overflow-x-hidden">
+
+    <!-- Background -->
+    <div class="fixed inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
+        <div class="blob-1 absolute -top-32 -left-32 w-[500px] h-[500px] rounded-full bg-cyan-500/[0.07] blur-[120px]"></div>
+        <div class="blob-2 absolute top-1/3 -right-40 w-[600px] h-[600px] rounded-full bg-violet-500/[0.06] blur-[140px]"></div>
+        <div class="blob-3 absolute -bottom-40 left-1/3 w-[450px] h-[450px] rounded-full bg-teal-400/[0.05] blur-[100px]"></div>
+        <div class="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,#07070d_70%)]"></div>
+    </div>
+
+    <!-- Header -->
+    <header class="sticky top-0 z-50 backdrop-blur-2xl bg-[#07070d]/70 border-b border-white/[0.06]">
+        <div class="max-w-6xl mx-auto px-5 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-violet-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+                    <i class="fas fa-grid-2 text-white text-sm"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold tracking-tight leading-none">AI Grid Cropper</h1>
+                    <p class="text-[11px] text-white/40 tracking-wide mt-0.5">Bulk 3×3 slice & download</p>
+                </div>
+            </div>
+            <div id="headerCounter" class="hidden items-center gap-2 px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20">
+                <i class="fas fa-images text-cyan-400 text-xs"></i>
+                <span id="headerCount" class="text-xs text-cyan-300 font-semibold">0</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main -->
+    <main class="relative z-10 max-w-6xl mx-auto px-5 py-10">
+
+        <!-- Upload Section -->
+        <section id="uploadSection" class="flex flex-col items-center">
+            <div class="text-center mb-8">
+                <h2 class="text-3xl sm:text-4xl font-bold tracking-tight mb-3">
+                    Slice multiple images into
+                    <span class="bg-gradient-to-r from-cyan-400 to-violet-400 bg-clip-text text-transparent">3×3 grids</span>
+                </h2>
+                <p class="text-white/40 max-w-lg mx-auto text-sm leading-relaxed">
+                    Upload 1–20 images at once. Each gets sliced into 9 tiles. Download all tiles as a single ZIP.
+                </p>
+            </div>
+
+            <div id="uploadArea"
+                 class="animated-border w-full max-w-xl rounded-3xl cursor-pointer transition-all duration-300"
+                 role="button" tabindex="0" aria-label="Upload images">
+                <div class="rounded-[calc(1.5rem-3px)] bg-[#0c0c18] px-8 py-14 flex flex-col items-center text-center gap-4 transition-all duration-300">
+                    <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500/10 to-violet-500/10 border border-white/[0.06] flex items-center justify-center">
+                        <i class="fas fa-cloud-arrow-up text-2xl text-cyan-400/80"></i>
+                    </div>
+                    <div>
+                        <p class="text-white/80 font-semibold text-lg mb-1">Drop your images here</p>
+                        <p class="text-white/30 text-sm">or click to browse — select multiple</p>
+                    </div>
+                    <div class="flex items-center gap-3 text-xs text-white/20">
+                        <span class="px-2 py-1 rounded bg-white/[0.04] border border-white/[0.06]">PNG</span>
+                        <span class="px-2 py-1 rounded bg-white/[0.04] border border-white/[0.06]">JPG</span>
+                        <span class="px-2 py-1 rounded bg-white/[0.04] border border-white/[0.06]">WebP</span>
+                    </div>
+                </div>
+            </div>
+            <input type="file" id="fileInput" accept="image/*" multiple class="hidden" aria-hidden="true">
+        </section>
+
+        <!-- Processing Section -->
+        <section id="processingSection" class="hidden flex flex-col items-center gap-6 py-20">
+            <div class="pulse-glow w-14 h-14 rounded-2xl bg-gradient-to-br from-cyan-500/20 to-violet-500/20 border border-cyan-500/20 flex items-center justify-center">
+                <i class="fas fa-wand-magic-sparkles text-xl text-cyan-400"></i>
+            </div>
+            <div class="text-center">
+                <p class="text-white/80 font-semibold text-lg mb-1">Processing images...</p>
+                <p id="processingCount" class="text-white/30 text-sm">Slicing 0 images into 3×3 grids</p>
+            </div>
+            <div class="w-56 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                <div class="h-full rounded-full shimmer-bar w-full"></div>
+            </div>
+        </section>
+
+        <!-- Grid Section -->
+        <section id="gridSection" class="hidden">
+
+            <!-- Top bar -->
+            <div class="slide-up flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                        <i class="fas fa-check text-emerald-400 text-xs"></i>
+                    </div>
+                    <div>
+                        <p id="summaryText" class="text-sm text-white/70 font-medium"></p>
+                        <p id="summarySub" class="text-xs text-white/30"></p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button id="addMoreBtn"
+                            class="px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.1] text-white/60 text-sm font-medium hover:bg-white/[0.08] hover:text-white/80 transition-all duration-300 flex items-center gap-2">
+                        <i class="fas fa-plus text-xs"></i>
+                        Add More
+                    </button>
+                    <button id="resetBtn"
+                            class="px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.1] text-white/60 text-sm font-medium hover:bg-white/[0.08] hover:text-white/80 transition-all duration-300 flex items-center gap-2">
+                        <i class="fas fa-arrow-rotate-left text-xs"></i>
+                        Reset
+                    </button>
+                </div>
+            </div>
+
+            <!-- Image Cards Grid -->
+            <div id="cardsContainer" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            </div>
+
+            <!-- Download Button -->
+            <div class="slide-up flex flex-col items-center gap-4 mt-10" style="animation-delay:.2s">
+                <button id="downloadAllBtn"
+                        class="w-full max-w-md px-8 py-4 rounded-2xl font-bold text-base text-white flex items-center justify-center gap-3 transition-all duration-300 hover:shadow-xl hover:shadow-cyan-500/20 hover:scale-[1.02] active:scale-[0.98]"
+                        style="background:linear-gradient(135deg,#06b6d4,#8b5cf6);box-shadow:0 4px 24px rgba(6,182,212,.2)">
+                    <i class="fas fa-download text-sm"></i>
+                    <span id="dlBtnText">Download All Tiles as ZIP</span>
+                </button>
+                <p id="downloadInfo" class="text-xs text-white/25"></p>
+            </div>
+        </section>
+    </main>
+
+    <!-- Modal -->
+    <div id="modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center p-6" role="dialog" aria-modal="true">
+        <div class="absolute inset-0 bg-black/80 backdrop-blur-xl" id="modalBackdrop"></div>
+        <div class="modal-enter relative z-10 max-w-2xl w-full">
+            <div class="rounded-2xl overflow-hidden border border-white/[0.08] bg-[#0c0c18] shadow-2xl shadow-cyan-500/10">
+                <div class="flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
+                    <span id="modalLabel" class="text-sm text-white/60 font-medium"></span>
+                    <div class="flex items-center gap-2">
+                        <button id="modalDownloadBtn" class="w-8 h-8 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] flex items-center justify-center transition-colors" aria-label="Download tile">
+                            <i class="fas fa-download text-xs text-white/50"></i>
+                        </button>
+                        <button id="modalCloseBtn" class="w-8 h-8 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] flex items-center justify-center transition-colors" aria-label="Close">
+                            <i class="fas fa-xmark text-xs text-white/50"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="p-4">
+                    <img id="modalImage" src="" alt="Tile preview" class="w-full rounded-xl object-contain max-h-[70vh]">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toastContainer" class="fixed bottom-6 right-6 z-[200] flex flex-col gap-3 pointer-events-none"></div>
+
+    <script>
+        // ==========================================
+        // State
+        // ==========================================
+        var imageStore = [];
+        var idCounter = 0;
+        var currentModalTile = null;
+        var isDownloading = false;
+
+        var bgPositions = [
+            '0% 0%','50% 0%','100% 0%',
+            '0% 50%','50% 50%','100% 50%',
+            '0% 100%','50% 100%','100% 100%'
+        ];
+        var tileLabels = [
+            '1\u00d71','1\u00d72','1\u00d73',
+            '2\u00d71','2\u00d72','2\u00d73',
+            '3\u00d71','3\u00d72','3\u00d73'
+        ];
+
+        // ==========================================
+        // Pixel-perfect tile calculation
+        // ==========================================
+        function calcTileLayout(imgW, imgH) {
+            var baseW = Math.floor(imgW / 3);
+            var remW = imgW - baseW * 3;
+            var colWidths = [], colX = [0], x = 0;
+            for (var c = 0; c < 3; c++) {
+                var w = baseW + (c < remW ? 1 : 0);
+                colWidths.push(w); x += w; colX.push(x);
+            }
+            var baseH = Math.floor(imgH / 3);
+            var remH = imgH - baseH * 3;
+            var rowHeights = [], rowY = [0], y = 0;
+            for (var r = 0; r < 3; r++) {
+                var h = baseH + (r < remH ? 1 : 0);
+                rowHeights.push(h); y += h; rowY.push(y);
+            }
+            return { colWidths: colWidths, rowHeights: rowHeights, colX: colX, rowY: rowY };
+        }
+
+        function getTileRect(tileIndex, layout) {
+            var col = tileIndex % 3;
+            var row = Math.floor(tileIndex / 3);
+            return {
+                sx: layout.colX[col], sy: layout.rowY[row],
+                sw: layout.colWidths[col], sh: layout.rowHeights[row]
+            };
+        }
+
+        // Synchronous tile render — image already loaded in memory
+        function renderTileCanvas(imgEl, tileIndex, layout) {
+            var rect = getTileRect(tileIndex, layout);
+            var canvas = document.createElement('canvas');
+            canvas.width = rect.sw; canvas.height = rect.sh;
+            canvas.getContext('2d').drawImage(imgEl, rect.sx, rect.sy, rect.sw, rect.sh, 0, 0, rect.sw, rect.sh);
+            return canvas;
+        }
+
+        // Load image once, return promise
+        function loadImage(src) {
+            return new Promise(function(resolve, reject) {
+                var img = new Image();
+                img.onload = function() { resolve(img); };
+                img.onerror = function() { reject(new Error('Image load failed')); };
+                img.src = src;
+            });
+        }
+
+        // ==========================================
+        // ROBUST download trigger
+        // URL revoke দেরিতে হবে, যাতে ডাউনলোড শুরু হতে পারে
+        // ==========================================
+        function triggerDownload(blob, filename) {
+            try {
+                // MS Edge/IE fallback
+                if (window.navigator && window.navigator.msSaveOrOpenBlob) {
+                    window.navigator.msSaveOrOpenBlob(blob, filename);
+                    return;
+                }
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.style.position = 'fixed';
+                a.style.left = '-9999px';
+                a.style.top = '-9999px';
+                document.body.appendChild(a);
+                a.click();
+                // ডাউনলোড শুরু হওয়ার জন্য ১৫ সেকেন্ড অপেক্ষা করে URL মুছব
+                setTimeout(function() {
+                    try { document.body.removeChild(a); } catch(e) {}
+                    URL.revokeObjectURL(url);
+                }, 15000);
+            } catch (err) {
+                showToast('Download failed: ' + err.message, 'error');
+            }
+        }
+
+        // ==========================================
+        // DOM
+        // ==========================================
+        var uploadSection = document.getElementById('uploadSection');
+        var processingSection = document.getElementById('processingSection');
+        var gridSection = document.getElementById('gridSection');
+        var cardsContainer = document.getElementById('cardsContainer');
+        var uploadArea = document.getElementById('uploadArea');
+        var fileInput = document.getElementById('fileInput');
+        var modal = document.getElementById('modal');
+        var modalImage = document.getElementById('modalImage');
+        var modalLabel = document.getElementById('modalLabel');
+        var modalBackdrop = document.getElementById('modalBackdrop');
+        var modalCloseBtn = document.getElementById('modalCloseBtn');
+        var modalDownloadBtn = document.getElementById('modalDownloadBtn');
+        var resetBtn = document.getElementById('resetBtn');
+        var downloadAllBtn = document.getElementById('downloadAllBtn');
+        var addMoreBtn = document.getElementById('addMoreBtn');
+        var headerCounter = document.getElementById('headerCounter');
+        var headerCount = document.getElementById('headerCount');
+        var dlBtnText = document.getElementById('dlBtnText');
+
+        // ==========================================
+        // State switching
+        // ==========================================
+        function isGridVisible() {
+            return !gridSection.classList.contains('hidden');
+        }
+
+        function switchState(state) {
+            uploadSection.classList.toggle('hidden', state !== 'upload');
+            processingSection.classList.toggle('hidden', state !== 'processing');
+            gridSection.classList.toggle('hidden', state !== 'grid');
+
+            if (state === 'upload') {
+                imageStore = [];
+                idCounter = 0;
+                fileInput.value = '';
+                headerCounter.classList.add('hidden');
+                headerCounter.classList.remove('flex');
+            }
+            if (state === 'grid') {
+                headerCounter.classList.remove('hidden');
+                headerCounter.classList.add('flex');
+                headerCount.textContent = imageStore.length;
+                updateSummary();
+                renderCards();
+            }
+        }
+
+        function updateSummary() {
+            var totalTiles = imageStore.length * 9;
+            document.getElementById('summaryText').textContent =
+                imageStore.length + ' image' + (imageStore.length > 1 ? 's' : '') + ' processed';
+            document.getElementById('summarySub').textContent =
+                totalTiles + ' tiles ready to download';
+            document.getElementById('downloadInfo').textContent =
+                totalTiles + ' PNG tiles will be packed into a single ZIP file';
+        }
+
+        // ==========================================
+        // File handling — SINGLE unified handler
+        // ==========================================
+        function processFiles(files) {
+            var validFiles = [];
+            for (var i = 0; i < files.length; i++) {
+                if (files[i].type.startsWith('image/')) validFiles.push(files[i]);
+            }
+            if (validFiles.length === 0) {
+                showToast('No valid images found', 'error');
+                return;
+            }
+            if (isGridVisible()) {
+                appendImages(validFiles);
+            } else {
+                startNewBatch(validFiles);
+            }
+        }
+
+        function startNewBatch(files) {
+            switchState('processing');
+            document.getElementById('processingCount').textContent =
+                'Slicing ' + files.length + ' image' + (files.length > 1 ? 's' : '') + ' into 3\u00d73 grids';
+
+            var loaded = 0;
+            files.forEach(function(file) {
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    var img = new Image();
+                    img.onload = function() {
+                        var layout = calcTileLayout(img.naturalWidth, img.naturalHeight);
+                        imageStore.push({
+                            id: ++idCounter,
+                            name: file.name.replace(/\.[^.]+$/, ''),
+                            src: e.target.result,
+                            width: img.naturalWidth,
+                            height: img.naturalHeight,
+                            layout: layout
+                        });
+                        loaded++;
+                        if (loaded === files.length) {
+                            setTimeout(function() { switchState('grid'); }, 600);
+                        }
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function appendImages(files) {
+            showToast('Adding ' + files.length + ' more image' + (files.length > 1 ? 's' : '') + '...', 'info');
+            var loaded = 0;
+            files.forEach(function(file) {
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    var img = new Image();
+                    img.onload = function() {
+                        var layout = calcTileLayout(img.naturalWidth, img.naturalHeight);
+                        imageStore.push({
+                            id: ++idCounter,
+                            name: file.name.replace(/\.[^.]+$/, ''),
+                            src: e.target.result,
+                            width: img.naturalWidth,
+                            height: img.naturalHeight,
+                            layout: layout
+                        });
+                        loaded++;
+                        if (loaded === files.length) {
+                            headerCount.textContent = imageStore.length;
+                            updateSummary();
+                            renderCards();
+                            showToast(files.length + ' image' + (files.length > 1 ? 's' : '') + ' added', 'success');
+                        }
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // ==========================================
+        // Card Rendering
+        // ==========================================
+        function renderCards() {
+            cardsContainer.innerHTML = '';
+
+            imageStore.forEach(function(item, idx) {
+                var card = document.createElement('div');
+                card.className = 'img-card card-enter rounded-2xl bg-white/[0.03] border border-white/[0.07] overflow-hidden';
+                card.style.animationDelay = (idx * 70) + 'ms';
+
+                // Top bar
+                var topBar = document.createElement('div');
+                topBar.className = 'flex items-center justify-between px-4 py-3 border-b border-white/[0.05]';
+
+                var infoDiv = document.createElement('div');
+                infoDiv.className = 'flex items-center gap-2 min-w-0';
+                infoDiv.innerHTML =
+                    '<div class="w-6 h-6 rounded-md bg-gradient-to-br from-cyan-500/20 to-violet-500/20 flex items-center justify-center flex-shrink-0">' +
+                        '<i class="fas fa-image text-[10px] text-cyan-400"></i>' +
+                    '</div>' +
+                    '<div class="min-w-0">' +
+                        '<p class="text-xs text-white/70 font-medium truncate">' + item.name + '</p>' +
+                        '<p class="text-[10px] text-white/30">' + item.width + '\u00d7' + item.height + '</p>' +
+                    '</div>';
+
+                var dlBtn = document.createElement('button');
+                dlBtn.className = 'w-7 h-7 rounded-lg bg-white/[0.04] hover:bg-cyan-500/20 flex items-center justify-center transition-colors flex-shrink-0';
+                dlBtn.setAttribute('aria-label', 'Download this image tiles');
+                dlBtn.dataset.imageId = item.id;
+                dlBtn.innerHTML = '<i class="fas fa-download text-[10px] text-white/40"></i>';
+
+                topBar.appendChild(infoDiv);
+                topBar.appendChild(dlBtn);
+                card.appendChild(topBar);
+
+                // Compact 3x3 grid
+                var gridWrap = document.createElement('div');
+                gridWrap.className = 'p-3';
+                var grid = document.createElement('div');
+                grid.className = 'grid grid-cols-3 gap-1';
+
+                for (var t = 0; t < 9; t++) {
+                    var tile = document.createElement('div');
+                    tile.className = 'grid-tile aspect-square rounded cursor-pointer relative';
+                    tile.style.backgroundImage = 'url(' + item.src + ')';
+                    tile.style.backgroundSize = '300% 300%';
+                    tile.style.backgroundPosition = bgPositions[t];
+
+                    var lbl = document.createElement('span');
+                    lbl.className = 'absolute inset-0 flex items-center justify-center bg-black/50 text-[8px] text-white/80 opacity-0 hover:opacity-100 transition-opacity rounded';
+                    lbl.textContent = tileLabels[t];
+                    tile.appendChild(lbl);
+
+                    (function(ti, iid) {
+                        tile.addEventListener('click', function() { openModal(iid, ti); });
+                    })(t, item.id);
+
+                    grid.appendChild(tile);
+                }
+                gridWrap.appendChild(grid);
+                card.appendChild(gridWrap);
+
+                // Bottom bar
+                var bottomBar = document.createElement('div');
+                bottomBar.className = 'px-4 py-2 border-t border-white/[0.05] flex items-center justify-between';
+                var l = item.layout;
+                bottomBar.innerHTML =
+                    '<span class="text-[10px] text-white/20">Cols: ' + l.colWidths.join('+') + 'px</span>' +
+                    '<span class="text-[10px] text-white/20">Rows: ' + l.rowHeights.join('+') + 'px</span>';
+                card.appendChild(bottomBar);
+
+                cardsContainer.appendChild(card);
+            });
+
+            // Single download buttons — event delegation approach
+            cardsContainer.addEventListener('click', function(e) {
+                var btn = e.target.closest('.single-dl-btn, [data-image-id]');
+                if (btn && btn.closest('.img-card')) {
+                    // Check if it's the download icon button
+                    if (btn.dataset.imageId && btn.querySelector('.fa-download')) {
+                        e.stopPropagation();
+                        downloadSingleImage(parseInt(btn.dataset.imageId));
+                    }
+                }
+            });
+        }
+
+        // ==========================================
+        // Download single image's 9 tiles
+        // ==========================================
+        async function downloadSingleImage(imageId) {
+            var item = imageStore.find(function(i) { return i.id === imageId; });
+            if (!item) return;
+            showToast('Preparing ' + item.name + ' tiles...', 'info');
+
+            try {
+                var imgEl = await loadImage(item.src);
+                var zip = new JSZip();
+
+                for (var t = 0; t < 9; t++) {
+                    var canvas = renderTileCanvas(imgEl, t, item.layout);
+                    var blob = await new Promise(function(resolve) {
+                        canvas.toBlob(resolve, 'image/png');
+                    });
+                    var col = t % 3;
+                    var row = Math.floor(t / 3);
+                    zip.file(item.name + '_tile_' + (row+1) + '-' + (col+1) + '.png', blob);
+                }
+
+                var content = await zip.generateAsync({ type: 'blob' });
+                triggerDownload(content, item.name + '_3x3_tiles.zip');
+                showToast(item.name + ' tiles downloaded', 'success');
+            } catch (err) {
+                showToast('Download failed: ' + err.message, 'error');
+            }
+        }
+
+        // ==========================================
+        // Download ALL tiles
+        // ==========================================
+        async function downloadAllTiles() {
+            if (imageStore.length === 0 || isDownloading) return;
+            isDownloading = true;
+
+            var totalTiles = imageStore.length * 9;
+            dlBtnText.textContent = 'Preparing ' + totalTiles + ' tiles...';
+            downloadAllBtn.style.opacity = '0.7';
+            downloadAllBtn.style.pointerEvents = 'none';
+
+            showToast('Packing all ' + totalTiles + ' tiles into ZIP...', 'info');
+
+            try {
+                var zip = new JSZip();
+
+                for (var i = 0; i < imageStore.length; i++) {
+                    var item = imageStore[i];
+                    var imgEl = await loadImage(item.src);
+
+                    for (var t = 0; t < 9; t++) {
+                        var canvas = renderTileCanvas(imgEl, t, item.layout);
+                        var blob = await new Promise(function(resolve) {
+                            canvas.toBlob(resolve, 'image/png');
+                        });
+                        var col = t % 3;
+                        var row = Math.floor(t / 3);
+                        zip.file(item.name + '/tile_' + (row+1) + '-' + (col+1) + '.png', blob);
+                    }
+                }
+
+                dlBtnText.textContent = 'Generating ZIP...';
+                var content = await zip.generateAsync({ type: 'blob' });
+                triggerDownload(content, 'all_3x3_tiles.zip');
+                showToast('All ' + totalTiles + ' tiles downloaded!', 'success');
+            } catch (err) {
+                showToast('Download failed: ' + err.message, 'error');
+            } finally {
+                isDownloading = false;
+                dlBtnText.textContent = 'Download All Tiles as ZIP';
+                downloadAllBtn.style.opacity = '1';
+                downloadAllBtn.style.pointerEvents = 'auto';
+            }
+        }
+
+        // ==========================================
+        // Modal
+        // ==========================================
+        function openModal(imageId, tileIndex) {
+            var item = imageStore.find(function(i) { return i.id === imageId; });
+            if (!item) return;
+            currentModalTile = { imageId: imageId, tileIndex: tileIndex };
+
+            loadImage(item.src).then(function(imgEl) {
+                var canvas = renderTileCanvas(imgEl, tileIndex, item.layout);
+                modalImage.src = canvas.toDataURL('image/png');
+                var col = tileIndex % 3;
+                var row = Math.floor(tileIndex / 3);
+                modalLabel.textContent = item.name + ' \u2014 Tile ' + tileLabels[tileIndex] + ' (' + canvas.width + '\u00d7' + canvas.height + 'px)';
+                modal.classList.remove('hidden');
+                document.body.style.overflow = 'hidden';
+            });
+        }
+
+        function closeModal() {
+            modal.classList.add('hidden');
+            document.body.style.overflow = '';
+            currentModalTile = null;
+        }
+
+        // ==========================================
+        // Toast
+        // ==========================================
+        function showToast(message, type) {
+            type = type || 'info';
+            var container = document.getElementById('toastContainer');
+            var toast = document.createElement('div');
+            var colorMap = {
+                info: 'from-cyan-500/20 to-cyan-500/5 border-cyan-500/25',
+                success: 'from-emerald-500/20 to-emerald-500/5 border-emerald-500/25',
+                error: 'from-red-500/20 to-red-500/5 border-red-500/25'
+            };
+            var iconMap = {
+                info: 'fa-circle-info text-cyan-400',
+                success: 'fa-circle-check text-emerald-400',
+                error: 'fa-circle-xmark text-red-400'
+            };
+            toast.className = 'toast-enter pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl bg-gradient-to-r ' + colorMap[type] + ' border backdrop-blur-xl text-sm text-white/90 shadow-lg max-w-xs';
+            toast.innerHTML = '<i class="fas ' + iconMap[type] + '"></i><span>' + message + '</span>';
+            container.appendChild(toast);
+            setTimeout(function() {
+                toast.classList.remove('toast-enter');
+                toast.classList.add('toast-exit');
+                setTimeout(function() { toast.remove(); }, 300);
+            }, 3500);
+        }
+
+        // ==========================================
+        // Event Listeners — no duplicates
+        // ==========================================
+        uploadArea.addEventListener('click', function() {
+            fileInput.value = '';
+            fileInput.click();
+        });
+        uploadArea.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault(); fileInput.value = ''; fileInput.click();
+            }
+        });
+
+        // SINGLE file change handler
+        fileInput.addEventListener('change', function() {
+            if (!this.files || this.files.length === 0) return;
+            var files = this.files;
+            processFiles(files);
+        });
+
+        // Drag & drop
+        uploadArea.addEventListener('dragover', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            this.classList.add('drag-over');
+        });
+        uploadArea.addEventListener('dragleave', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            this.classList.remove('drag-over');
+        });
+        uploadArea.addEventListener('drop', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            this.classList.remove('drag-over');
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) processFiles(e.dataTransfer.files);
+        });
+
+        // Paste
+        document.addEventListener('paste', function(e) {
+            var items = e.clipboardData && e.clipboardData.items;
+            if (!items) return;
+            var files = [];
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].type.indexOf('image/') === 0) files.push(items[i].getAsFile());
+            }
+            if (files.length > 0) processFiles(files);
+        });
+
+        // Add More
+        addMoreBtn.addEventListener('click', function() {
+            fileInput.value = '';
+            fileInput.click();
+        });
+
+        // Reset
+        resetBtn.addEventListener('click', function() { switchState('upload'); });
+
+        // Download ALL
+        downloadAllBtn.addEventListener('click', downloadAllTiles);
+
+        // Modal
+        modalCloseBtn.addEventListener('click', closeModal);
+        modalBackdrop.addEventListener('click', closeModal);
+        modalDownloadBtn.addEventListener('click', function() {
+            if (!currentModalTile) return;
+            var item = imageStore.find(function(i) { return i.id === currentModalTile.imageId; });
+            if (!item) return;
+
+            loadImage(item.src).then(function(imgEl) {
+                var canvas = renderTileCanvas(imgEl, currentModalTile.tileIndex, item.layout);
+                canvas.toBlob(function(blob) {
+                    if (!blob) { showToast('Failed to generate tile', 'error'); return; }
+                    var col = currentModalTile.tileIndex % 3;
+                    var row = Math.floor(currentModalTile.tileIndex / 3);
+                    triggerDownload(blob, item.name + '_tile_' + (row+1) + '-' + (col+1) + '.png');
+                    showToast('Tile downloaded', 'success');
+                }, 'image/png');
+            });
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
+        });
+
+        // Init
+        switchState('upload');
+    </script>
+</body>
+</html>
